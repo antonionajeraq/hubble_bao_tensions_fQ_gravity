@@ -279,7 +279,7 @@ def chi_squared(theta, print_output=False):
     chi2_maser = ((H0 - H0_maser) / eH0_maser)**2
 
     # Cosmic Chronometers (CC) data
-    H_z_CC_predicted = H0 * np.sqrt(omega_m * (1 + z_CC)**3 + (1 - omega_m))
+    H_z_CC_predicted = H0 * reduced_hubble_factor(z_CC, omega_m, w_gamma/h**2, w_nu/h**2, w_nu_ur/h**2, a_nr_sq)
 
     chi2_CC = np.sum(((H_z_CC_predicted - H_z_CC)/sigma_H_z_CC)**2)
 
