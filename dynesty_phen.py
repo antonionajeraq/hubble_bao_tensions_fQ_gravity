@@ -117,14 +117,28 @@ z_CC, H_z_CC, sigma_H_z_CC = np.loadtxt('CC_data.txt', unpack=True)
 #from scipy.special import lambertw
 #from scipy.optimize import root_scalar
 
+c_km_s = 299792.458
+
 def Hubble_factor(z, Omega_bc, Omega_gamma, Omega_nu, Omega_nu_ur, a_nr_sq, H0, A, z_1, function_type=phenomenological_function):
+    # NOTE (paper-vs-code): be careful with closure here.
+    # Omega_Lambda is defined using (Omega_bc, Omega_gamma, Omega_nu), but the sqrt(...) term below
+    # also includes a neutrino transition contribution parameterized by Omega_nu_ur and a_nr_sq.
+    # If Omega_nu_ur is not accounted for consistently in the z=0 closure relation, then H(z=0)
+    # may not correspond exactly to the intended H0 parameter.
     Omega_Lambda = 1 - Omega_bc - Omega_gamma - Omega_nu
+
     if function_type == "exp":
+        # NOTE (paper convention): the phenomenological model is often described as H(z)=H_LCDM(z)+DeltaH(z),
+        # with the predicted local Hubble constant being H0_local = H0_LCDM + A. Here H0 multiplies the
+        # sqrt(LCDM-like) piece, while A controls an additive DeltaH(z) term.
         H = H0 * np.sqrt(Omega_bc * (1 + z)**3 + Omega_gamma*(1+z)**4 + Omega_Lambda + Omega_nu_ur * np.sqrt(1+1/((1+z)**2*a_nr_sq)) * (1+z)**4 ) + A * np.exp(- z/z_1) #exp
+
     if function_type == "sech":
         u = np.exp(-z/z_1); H = H0 * np.sqrt(Omega_bc * (1 + z)**3 + Omega_gamma*(1+z)**4 + Omega_Lambda + Omega_nu_ur * np.sqrt(1+1/((1+z)**2*a_nr_sq)) * (1+z)**4 ) + 2.0 * A * u / (1 + u*u) #sech
+
     if function_type == "tanh":
         H = H0 * np.sqrt(Omega_bc * (1 + z)**3 + Omega_gamma*(1+z)**4 + Omega_Lambda + Omega_nu_ur * np.sqrt(1+1/((1+z)**2*a_nr_sq)) * (1+z)**4 ) + A * tanh_z1_by_z_vec(z, z_1) #tanh
+
     if function_type == "polynomial":
         H = H0 * np.sqrt(Omega_bc * (1 + z)**3 + Omega_gamma*(1+z)**4 + Omega_Lambda + Omega_nu_ur * np.sqrt(1+1/((1+z)**2*a_nr_sq)) * (1+z)**4 ) + A / (1 + z/z_1) #polynomial decay
     return H
@@ -170,10 +184,10 @@ from scipy.stats import multivariate_normal, norm
 
 def log_prior(theta):
     if not nested_sampling_data == "desi_only":
-        w_b, omega_m, H0, A, z_1 = theta
+        w_b, omega_m, H0_LCDM, A, z_1 = theta
         if not (0.020 < w_b < 0.025): return -np.inf
         if not (0.01 < omega_m < 0.49): return -np.inf
-        if not (50.0 < H0 < 100.0): return -np.inf
+        if not (50.0 < H0_LCDM < 100.0): return -np.inf
         if not (0.0 < A < 10.0): return -np.inf
         if not (0.0 < z_1 < 10.0): return -np.inf
         #if not (0.0 < k < 10.0): return -np.inf
@@ -182,6 +196,8 @@ def log_prior(theta):
     else:
         omega_m, H0_rd, A_rd, z_1 = theta
         if not (0.01 < omega_m < 0.49): return -np.inf
+        # H0_rd is interpreted as H0_LCDM * r_d in km/s (with r_d in Mpc).
+        # A_rd is interpreted as A * r_d in km/s.
         if not (5000.0 < H0_rd < 13000.0): return -np.inf
         if not (0.0 < A_rd < 10000.0): return -np.inf
         if not (0.0 < z_1 < 10.0): return -np.inf
@@ -256,9 +272,9 @@ def theta_star(w_b, w_bc, h, A, z_1):
 
     return theta_star_value
 
-def chi2_cmb(w_bc, w_b, H0, A, z_1):
+def chi2_cmb(w_bc, w_b, H0_LCDM, A, z_1):
     
-    theta_star_value = 100*theta_star(w_b, w_bc, H0/100, A, z_1)
+    theta_star_value = 100*theta_star(w_b, w_bc, H0_LCDM/100, A, z_1)
 
     mu_model = np.array([theta_star_value, w_b, w_bc])
 
@@ -270,8 +286,8 @@ from scipy.optimize import root_scalar
 
 def log_likelihood(theta, use_desi=True, use_h0=True, use_cc=True, use_cmb=True, desi_only=False):
     if not desi_only:
-        w_b, omega_m, H0, A, z_1 = theta
-        h = H0 / 100.0
+        w_b, omega_m, H0_LCDM, A, z_1 = theta
+        h = H0_LCDM / 100.0
         w_bc = omega_m * h**2
     else:
         omega_m, H0_rd, A_rd, z_1 = theta
@@ -280,7 +296,7 @@ def log_likelihood(theta, use_desi=True, use_h0=True, use_cc=True, use_cmb=True,
     log_det_total = 0
 
     if use_cmb:
-        chi2_total += chi2_cmb(w_bc, w_b, H0, A*H_100/100, z_1)
+        chi2_total += chi2_cmb(w_bc, w_b, H0_LCDM, A*H_100/100, z_1)
         log_det_total += np.log(2 * np.pi * np.linalg.det(cov_cmb))
 
     if use_desi:
@@ -288,7 +304,7 @@ def log_likelihood(theta, use_desi=True, use_h0=True, use_cc=True, use_cmb=True,
             r_d = 147.05 * Mpc * (w_b/0.02236)**-0.13 * (w_bc/0.1432)**-0.23 * (N_eff/3.04)**-0.1
             predictions = model_predictions(z_DESI, omega_m, w_gamma/h**2, w_nu/h**2, w_nu_ur/h**2, a_nr_sq, h*H_100, A*H_100/100, z_1, r_d)
         else:
-            predictions = model_predictions(z_DESI, omega_m, 0, 0, 0, a_nr_sq, 1000*H0_rd, 1000*A_rd, z_1, 1)
+            predictions = model_predictions_desi_only(z_DESI, omega_m, H0_rd, A_rd, z_1)
         diff = predictions - Data_DESI
         chi2_DESI = diff @ C_inv_total @ diff
         chi2_total += chi2_DESI
@@ -306,15 +322,16 @@ def log_likelihood(theta, use_desi=True, use_h0=True, use_cc=True, use_cmb=True,
         # We perform the fit to derive H0 from the model predictions
         H0_measured = (np.sum(H*(1 + (1 + q0) * z)))/(np.sum((1 + (1 + q0) * z)**2))
 
+        H0_local = H0_LCDM + A
         chi2_H0 = ((H0_measured - H0_SHOES) / eH0_SHOES)**2 
         # SNII H_0
-        chi2_SNII = ((H0 + A - H0_SNII) / eH0_SNII)**2 
+        chi2_SNII = ((H0_local - H0_SNII) / eH0_SNII)**2 
 
         # SBF H_0
-        chi2_SBF = ((H0 + A - H0_SBF) / eH0_SBF)**2
+        chi2_SBF = ((H0_local - H0_SBF) / eH0_SBF)**2
 
         # Maser H_0
-        chi2_maser = ((H0 + A - H0_maser) / eH0_maser)**2 
+        chi2_maser = ((H0_local - H0_maser) / eH0_maser)**2 
 
         chi2_total += chi2_H0 + chi2_SNII + chi2_SBF + chi2_maser
         log_det_total += (np.log(2 * np.pi * eH0_SHOES**2) + np.log(2 * np.pi * eH0_SNII**2) + np.log(2 * np.pi * eH0_SBF**2) + np.log(2 * np.pi * eH0_maser**2))
@@ -330,9 +347,9 @@ def log_likelihood(theta, use_desi=True, use_h0=True, use_cc=True, use_cmb=True,
     return -0.5 * (chi2_total + log_det_total)  # Return log likelihood
 
 def chi_squared(theta, print_output=False):
-    w_b, omega_m, H0, A, z_1 = theta
+    w_b, omega_m, H0_LCDM, A, z_1 = theta
 
-    h = H0 / 100.0
+    h = H0_LCDM / 100.0
 
     w_bc = omega_m * h**2
     r_d = 147.05 * Mpc * (w_b/0.02236)**-0.13 * (w_bc/0.1432)**-0.23 * (N_eff/3.04)**-0.1
@@ -355,15 +372,16 @@ def chi_squared(theta, print_output=False):
 
     chi2_H0 = ((H0_measured - H0_SHOES) / eH0_SHOES)**2 
 
-    chi2_CMB = chi2_cmb(w_bc, w_b, H0, A*H_100/100, z_1) 
+    chi2_CMB = chi2_cmb(w_bc, w_b, H0_LCDM, A*H_100/100, z_1) 
     # SNII H_0
-    chi2_SNII = ((H0 + A - H0_SNII) / eH0_SNII)**2 
+    H0_local = H0_LCDM + A
+    chi2_SNII = ((H0_local - H0_SNII) / eH0_SNII)**2 
 
     # SBF H_0
-    chi2_SBF = ((H0 + A - H0_SBF) / eH0_SBF)**2 
+    chi2_SBF = ((H0_local - H0_SBF) / eH0_SBF)**2 
 
     # Maser H_0
-    chi2_maser = ((H0 + A - H0_maser) / eH0_maser)**2
+    chi2_maser = ((H0_local - H0_maser) / eH0_maser)**2
 
     # Cosmic Chronometers (CC) data
     H_z_CC_predicted = Hubble_factor(z_CC, omega_m, w_gamma/h**2, w_nu/h**2, w_nu_ur/h**2, a_nr_sq, h*H_100, A*H_100/100, z_1)
@@ -381,6 +399,40 @@ def chi_squared(theta, print_output=False):
     #return chi2_noDESI
     #return chi2_CMB
     return chi2_total  # Return log likelihood
+
+def Hrd_factor(z, Omega_m, H0_rd, A_rd, z_1, function_type=phenomenological_function):
+    Omega_Lambda = 1 - Omega_m
+    # NOTE (desi_only): here we use the late-time approximation E(z)=sqrt(Ωm(1+z)^3 + 1-Ωm),
+    # i.e. we neglect radiation and (early-time) neutrino contributions in this DESI-only /r_d prediction.
+    E = np.sqrt(Omega_m * (1 + z)**3 + Omega_Lambda)
+    if function_type == "exp":
+        Delta = A_rd * np.exp(-z / z_1)
+    if function_type == "sech":
+        u = np.exp(-z / z_1)
+        Delta = 2.0 * A_rd * u / (1 + u*u)
+    if function_type == "tanh":
+        Delta = A_rd * tanh_z1_by_z_vec(z, z_1)
+    if function_type == "polynomial":
+        Delta = A_rd / (1 + z / z_1)
+    return H0_rd * E + Delta
+
+def integrand_desi_only(z, Omega_m, H0_rd, A_rd, z_1):
+    return 1.0 / Hrd_factor(z, Omega_m, H0_rd, A_rd, z_1)
+
+from scipy.integrate import quad
+
+def comoving_distance_over_rd(Omega_m, H0_rd, A_rd, z_1, z):
+    integral, _ = quad(integrand_desi_only, 0, z, args=(Omega_m, H0_rd, A_rd, z_1))
+    return c_km_s * integral
+
+comoving_distance_over_rd_vec = np.vectorize(comoving_distance_over_rd, excluded=['Omega_m', 'H0_rd', 'A_rd', 'z_1'])
+
+def model_predictions_desi_only(z, Omega_m, H0_rd, A_rd, z_1):
+    DM_over_rd = comoving_distance_over_rd_vec(Omega_m, H0_rd, A_rd, z_1, z)
+    DH_over_rd = c_km_s / Hrd_factor(z, Omega_m, H0_rd, A_rd, z_1)
+    DV_over_rd = np.power((DM_over_rd[0] ** 2) * DH_over_rd[0] * z[0], 1.0 / 3.0)
+    interleaved = np.stack([DM_over_rd[1:], DH_over_rd[1:]], axis=1).reshape(-1)
+    return np.concatenate([np.array([DV_over_rd]), interleaved])
 
 def minimize_chi2():
     from scipy.optimize import minimize
@@ -411,7 +463,7 @@ def minimize_chi2():
         fitted_params = result.x
         print("\nOptimization Successful!")
         print("Fitted parameters:")
-        print(f"w_b: {fitted_params[0]:.6f}, omega_m: {fitted_params[1]:.6f}, H0: {fitted_params[2]:.6f}, A: {fitted_params[3]:.6f}, z_1: {fitted_params[4]:.6f}")
+        print(f"w_b: {fitted_params[0]:.6f}, omega_m: {fitted_params[1]:.6f}, H0_LCDM: {fitted_params[2]:.6f}, A: {fitted_params[3]:.6f}, z_1: {fitted_params[4]:.6f}")
         
         # Call the original function one last time to print the components
         chi2_min = chi_squared(fitted_params, print_output=True)
@@ -440,15 +492,15 @@ def prior_transform(u):
     if not nested_sampling_data == "desi_only":
         w_b = 0.020 + 0.005 * u[0]        # [0.020, 0.025]
         omega_m = 0.01 + 0.48 * u[1]         # [0.01, 0.49]
-        H0 = 50.0 + 50.0 * u[2]              # [50.0, 100.0]
+        H0_LCDM = 50.0 + 50.0 * u[2]              # [50.0, 100.0]
         A = 0.0 + 10.0 * u[3]               # [0.0, 10.0]
         z_1 = 0.00 + 1.0 * u[4]                # [0.0, 0.3]
         # Enforce omega_m + omega_Lambda < 1
-        return [w_b, omega_m, H0, A, z_1]
+        return [w_b, omega_m, H0_LCDM, A, z_1]
     else:
         omega_m = 0.01 + 0.48 * u[0]         # [0.01, 0.49]
-        H0_rd = 5000.0 + 8000.0 * u[1]              # [50.0, 100.0]
-        A_rd = 0.0 + 10000.0 * u[2]               # [0.0, 10.0]
+        H0_rd = 5000.0 + 8000.0 * u[1]              # H0_LCDM * r_d in km/s
+        A_rd = 0.0 + 10000.0 * u[2]               # A * r_d in km/s
         z_1 = 0.00 + 1.0 * u[3]                # [0.0, 0.3]
         return [omega_m, H0_rd, A_rd, z_1]
 
